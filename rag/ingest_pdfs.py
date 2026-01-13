@@ -47,15 +47,11 @@ def iter_target_pdfs(base_dir: Path, topics: List[str]) -> Iterable[Path]:
 # -------------------------
 # Paragraph chunking
 # -------------------------
-def split_into_paragraphs(page_text: str, *, min_chars: int = 80) -> List[str]:
-    """
-    Very simple paragraph splitter:
-    - split by blank lines
-    - keep sufficiently long fragments
-    """
-    raw = [clean_text(x) for x in page_text.split("\n\n")]
-    out = [x for x in raw if len(x) >= min_chars]
-    return out
+def split_into_paragraphs(page_text_raw: str, *, min_chars: int = 80) -> List[str]:
+    # blank line(s)で段落分割（PDFによって \n\n が安定しないので正規表現を使う）
+    paras = re.split(r"\n\s*\n", page_text_raw)
+    paras = [clean_text(p) for p in paras]
+    return [p for p in paras if len(p) >= min_chars]
 
 def pack_paragraphs(
     paras: List[str],
@@ -108,6 +104,57 @@ def pack_paragraphs(
 
     return chunks
 
+def is_toc_like(text: str, *, page: int) -> bool:
+    """
+    Conservative TOC/Index filter.
+    - Only triggers on strong keywords OR very TOC-like structure
+    - Mostly limited to early pages (page <= 25 by default usage)
+    """
+    t = text.lower()
+
+    strong_keywords = [
+        "table of contents", "contents",
+        "index",
+        "acknowledgments", "acknowledgements",
+        "preface",
+        "bibliography", "references",
+        "list of figures", "list of tables",
+    ]
+    if any(k in t for k in strong_keywords):
+        return True
+
+    # Only consider structural heuristics on early pages.
+    if page > 25:
+        return False
+
+    # Heuristic: many lines that look like "Title .... 123"
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if len(lines) < 8:
+        return False
+
+    dotted_leader_like = 0
+    page_num_line = 0
+    for ln in lines[:80]:
+        # dotted leaders: "...." or ". . . ."
+        if ("...." in ln) or (re.search(r"\.\s*\.\s*\.\s*\.", ln) is not None):
+            dotted_leader_like += 1
+        # ends with a page number
+        if re.search(r"\b\d{1,4}\s*$", ln):
+            page_num_line += 1
+
+    # TOC often has lots of page-number-ending lines and dotted leaders
+    if dotted_leader_like >= 3 and page_num_line >= 8:
+        return True
+
+    # Another TOC-like: many short lines ending with numbers
+    short_num_lines = sum(
+        1 for ln in lines[:80]
+        if len(ln) <= 80 and re.search(r"\b\d{1,4}\s*$", ln)
+    )
+    if short_num_lines >= 12:
+        return True
+
+    return False
 
 # -------------------------
 # Main ingest
@@ -129,12 +176,19 @@ def ingest_pdf(
     records: List[Dict[str, Any]] = []
     for page_idx in range(doc.page_count):
         page = doc.load_page(page_idx)
-        text = page.get_text("text")
-        text = clean_text(text)
+        text_raw = page.get_text("text")
+        # Keep newlines for TOC detection, but normalize spaces per line
+        lines = [clean_text(ln) for ln in text_raw.split("\n")]
+        text_for_toc = "\n".join([ln for ln in lines if ln])  # keep line breaks
+
+        # For chunking we can use a space-normalized version
+        text = clean_text(text_raw)
         if not text:
             continue
 
-        paras = split_into_paragraphs(text, min_chars=min_chars_para)
+        page_skip = is_toc_like(text_for_toc, page=page_idx + 1)
+
+        paras = split_into_paragraphs(text_raw, min_chars=min_chars_para)
         chunks = pack_paragraphs(paras, target_chars=target_chars_chunk, overlap_paras=1)
 
         for j, chunk_text in enumerate(chunks):
@@ -147,6 +201,7 @@ def ingest_pdf(
                     "title": title,
                     "page": page_idx + 1,
                     "path": str(pdf_path.as_posix()),
+                    "skip": page_skip,
                 },
             }
             records.append(rec)
@@ -187,7 +242,10 @@ def build_chunks_jsonl(
 if __name__ == "__main__":
     repo_root = Path(__file__).resolve().parents[1]  # .../research_rag
     out_path = repo_root / "index" / "chunks.jsonl"
-    topics = ["econometrics", "reinforcement_learning"]
+    topics = [
+        "econometrics",
+        "reinforcement_learning"
+        ]
 
     n_pdfs, n_chunks = build_chunks_jsonl(repo_root=repo_root, topics=topics, out_path=out_path)
     print(f"Done. PDFs: {n_pdfs}, chunks: {n_chunks}")
