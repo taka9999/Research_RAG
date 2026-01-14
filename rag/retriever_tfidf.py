@@ -8,20 +8,54 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+# --- Lightweight query expansion for econometrics + RL ---
 EXPAND = {
-        "fixed effects": ["FE", "within estimator", "within transformation"],
-        "first differencing": ["FD", "first-difference", "first-difference estimator"],
-        "hac": ["newey-west", "heteroskedasticity and autocorrelation consistent"],
-        "gmm": ["optimal gmm", "two-step", "weighting matrix"],
-        }
+    # Panel / FE / FD
+    "fixed effects": ["FE", "within estimator", "within transformation", "demeaning"],
+    "first differencing": ["FD", "first-difference", "difference estimator"],
+    "random effects": ["RE", "GLS", "quasi-demeaning"],
+    "strict exogeneity": ["strictly exogenous", "FE.1", "FD.1", "leads test"],
+    "hausman": ["hausman test", "endogeneity test", "specification test"],
+
+    # IV / GMM / HAC
+    "instrument": ["IV", "2SLS", "GMM"],
+    "endogeneity": ["IV", "2SLS", "control function", "hausman"],
+    "gmm": ["two-step", "weighting matrix", "moment conditions", "optimal gmm"],
+    "hac": ["Newey-West", "long-run variance", "kernel", "bandwidth"],
+
+    # RL / policy gradient / PPO
+    "policy gradient": ["REINFORCE", "advantage", "baseline"],
+    "ppo": ["clip", "KL", "policy ratio", "surrogate objective"],
+    "kl": ["KL divergence", "relative entropy", "trust region"],
+    "actor critic": ["advantage", "value function", "TD error"],
+    "temporal difference": ["TD", "TD error", "bootstrapping"],
+    "continuous time": ["SDE", "HJB", "Ito", "controlled diffusion"],
+    "stochastic control": ["HJB", "Bellman", "dynamic programming"],
+}
 
 def expand_query(q: str) -> str:
-    qq = q
+    """
+    Add a few high-signal synonyms/abbreviations based on keywords in the query.
+    Keeps it lightweight; avoids exploding prompt length.
+    """
     ql = q.lower()
-    for k, vs in EXPAND.items():
+    extra = []
+    for k, vals in EXPAND.items():
         if k in ql:
-            qq += " " + " ".join(vs)
-    return qq
+            extra.extend(vals)
+
+    # Deduplicate while preserving order
+    seen = set()
+    extra2 = []
+    for w in extra:
+        wl = w.lower()
+        if wl not in seen:
+            extra2.append(w)
+            seen.add(wl)
+
+    if extra2:
+        return q + " " + " ".join(extra2)
+    return q
 
 
 @dataclass
@@ -57,10 +91,13 @@ class TfidfRetriever:
 
         return cls(chunks)
 
-    def search(self, query: str, *, top_k: int = 8, topic: str | None = None) -> List[Tuple[float, Chunk]]:
-        query = expand_query(query)
+    def search(self, query: str, *, top_k: int = 8, topic: str | None = None, debug: bool = False) -> List[Tuple[float, Chunk]]:
+        
+        q_exp = expand_query(query)
+        if debug and q_exp != query:
+            print("[expanded query]", q_exp)
 
-        qv = self.vectorizer.transform([query])
+        qv = self.vectorizer.transform([q_exp])
         scores = (self.X @ qv.T).toarray().reshape(-1)
 
         idx = np.argsort(-scores)
@@ -91,7 +128,14 @@ if __name__ == "__main__":
         ("multi-headed networks continual learning", None),
     ]
 
-    for q, t in tests:
+    tests2 = [
+        ("proximal policy optimization clip objective KL penalty","reinforcement_learning"),
+        ("PPO clipped surrogate objective r_t(theta) advantage","reinforcement_learning"),
+        ("trust region KL constraint TRPO PPO","reinforcement_learning"),
+        ("KL penalty beta PPO","reinforcement_learning"),
+    ]
+
+    for q, t in tests2:
         print("\n" + "="*80)
         print("Q:", q, "| topic:", t)
         res = retr.search(q, top_k=5, topic=t)
