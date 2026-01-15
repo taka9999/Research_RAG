@@ -1,0 +1,2 @@
+{"id": "q001", "question": "strict exogeneityとは？", "topic": "econometrics", "gold_chunk_ids": ["Wooldridge - Cross-section and Panel Data::p293::c0", "Wooldridge - Cross-section and Panel Data::p298::c0"]}
+{"id": "q002", "question": "PPOのclip objectiveを説明して", "topic": "reinforcement_learning", "gold_chunk_ids": ["PolicyOptimizationTDlearninginContinuoustime::p1::c0", "PolicyOptimizationTDlearninginContinuoustime::p3::c0"]}
